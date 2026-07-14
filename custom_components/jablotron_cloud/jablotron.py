@@ -51,8 +51,11 @@ class JablotronClient:
 
         self.services: dict[int, JablotronServiceData] = {}
         self.force_arm = force_arm
+        self._username = username
+        self._password = password
         self._default_pin = default_pin
-        # Single bridge instance so the session cookie set by perform_login() is reused across calls
+        # The bridge instance persists between logins so the session cookie set by
+        # perform_login() is reused across calls; it is recreated on each login.
         self._bridge = Jablotron(username, password, default_pin)
         self._login_lock = threading.Lock()
         self._session_generation = 0
@@ -80,6 +83,9 @@ class JablotronClient:
             session_age = time.monotonic() - self._session_created_at
             if self._session_generation == 0 or session_age > SESSION_MAX_AGE:
                 _LOGGER.debug("Logging in to Jablotron Cloud")
+                # Recreate the bridge so the login request is not sent with a stale session
+                # cookie, which could prevent the API from issuing a fresh session id
+                self._bridge = Jablotron(self._username, self._password, self._default_pin)
                 self._bridge.perform_login()
                 self._session_generation += 1
                 self._session_created_at = time.monotonic()
