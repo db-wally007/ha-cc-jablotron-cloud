@@ -5,7 +5,15 @@ from __future__ import annotations
 from functools import partial
 import logging
 
-from jablotronpy import IncorrectPinCodeException, UnauthorizedException
+from jablotronpy import (
+    BadRequestException,
+    IncorrectPinCodeException,
+    InvalidSessionIdException,
+    JablotronApiException,
+    SessionExpiredException,
+    UnauthorizedException,
+)
+from requests import RequestException
 
 from homeassistant.components.alarm_control_panel import (
     AlarmControlPanelEntity,
@@ -20,6 +28,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from . import JablotronClient, JablotronConfigEntry, JablotronData, JablotronDataCoordinator
 from .const import DOMAIN
 from .entity import JablotronEntity
+from .jablotron import TooManyRequestsException
 from .utils import find_section_alarm_event, get_component_state, section_state_to_alarm_state
 
 _LOGGER = logging.getLogger(__name__)
@@ -127,10 +136,9 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
         try:
             code = self.code_or_default_code(code)
             _LOGGER.debug("Sending disarm for section '%s' (service %d)", self._section_name, self._service_id)
-            bridge = await self.hass.async_add_executor_job(self._client.get_bridge)
             disarm_successful = await self.hass.async_add_executor_job(
                 partial(
-                    bridge.control_section,
+                    self._client.control_section,
                     service_id=self._service_id,
                     service_type=self._service_type,
                     component_id=self._section_id,
@@ -145,6 +153,16 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
             raise ConfigEntryAuthFailed(ex) from ex
         except IncorrectPinCodeException as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
+        except TooManyRequestsException as ex:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
+        except (
+            BadRequestException,
+            InvalidSessionIdException,
+            JablotronApiException,
+            RequestException,
+            SessionExpiredException,
+        ) as ex:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="alarm_control_failed") from ex
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
         """Send arm request."""
@@ -156,10 +174,9 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
                 self._service_id,
                 self._client.force_arm,
             )
-            bridge = await self.hass.async_add_executor_job(self._client.get_bridge)
             arm_successful = await self.hass.async_add_executor_job(
                 partial(
-                    bridge.control_section,
+                    self._client.control_section,
                     service_id=self._service_id,
                     service_type=self._service_type,
                     component_id=self._section_id,
@@ -175,6 +192,16 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
             raise ConfigEntryAuthFailed(ex) from ex
         except IncorrectPinCodeException as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
+        except TooManyRequestsException as ex:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
+        except (
+            BadRequestException,
+            InvalidSessionIdException,
+            JablotronApiException,
+            RequestException,
+            SessionExpiredException,
+        ) as ex:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="alarm_control_failed") from ex
 
     async def async_alarm_arm_home(self, code: str | None = None) -> None:
         """Send partial arm request."""
@@ -189,10 +216,9 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
                 self._service_id,
                 self._client.force_arm,
             )
-            bridge = await self.hass.async_add_executor_job(self._client.get_bridge)
             arm_successful = await self.hass.async_add_executor_job(
                 partial(
-                    bridge.control_section,
+                    self._client.control_section,
                     service_id=self._service_id,
                     service_type=self._service_type,
                     component_id=self._section_id,
@@ -208,6 +234,16 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
             raise ConfigEntryAuthFailed(ex) from ex
         except IncorrectPinCodeException as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
+        except TooManyRequestsException as ex:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
+        except (
+            BadRequestException,
+            InvalidSessionIdException,
+            JablotronApiException,
+            RequestException,
+            SessionExpiredException,
+        ) as ex:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="alarm_control_failed") from ex
 
     @callback
     def _handle_coordinator_update(self) -> None:
