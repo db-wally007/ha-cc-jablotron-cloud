@@ -6,7 +6,7 @@ from functools import partial
 import logging
 from typing import Any
 
-from jablotronpy import UnauthorizedException
+from jablotronpy import TooManyRequestsException, UnauthorizedException
 
 from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACAction, HVACMode
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
@@ -17,7 +17,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from . import JablotronClient, JablotronConfigEntry, JablotronData, JablotronDataCoordinator
 from .const import DOMAIN, HVAC_MODE_TO_THERMO_STATE, THERMO_STATE_TO_HVAC_MODE
 from .entity import JablotronEntity
-from .jablotron import TooManyRequestsException
 from .utils import get_thermo_device
 
 _LOGGER = logging.getLogger(__name__)

@@ -7,8 +7,6 @@ from homeassistant.const import Platform
 # Integration constants
 ALARM_EVENT_TYPE = "ALARM"
 DOMAIN = "jablotron_cloud"
-# Refresh the API session proactively after this many seconds, before the server-side expiry (~30 minutes) hits.
-SESSION_MAX_AGE = 25 * 60
 UNSUPPORTED_SERVICES = ["FUTURA2", "AMBIENTA", "VOLTA", "LOGBOOK"]
 PLATFORMS: list[Platform] = [
     Platform.ALARM_CONTROL_PANEL,

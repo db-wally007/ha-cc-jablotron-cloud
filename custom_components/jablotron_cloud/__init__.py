@@ -13,6 +13,7 @@ from jablotronpy import (
     InvalidSessionIdException,
     JablotronApiException,
     SessionExpiredException,
+    TooManyRequestsException,
     UnauthorizedException,
 )
 from requests import RequestException
@@ -32,7 +33,7 @@ from homeassistant.helpers.entity_registry import async_migrate_entries
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import PLATFORMS, UNSUPPORTED_SERVICES
-from .jablotron import JablotronClient, TooManyRequestsException
+from .jablotron import JablotronClient
 from .types import JablotronServiceCapabilities, JablotronServiceData
 from .utils import update_unique_id
 

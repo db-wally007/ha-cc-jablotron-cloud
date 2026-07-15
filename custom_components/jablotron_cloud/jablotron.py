@@ -3,12 +3,10 @@
 from collections.abc import Callable
 import logging
 import threading
-import time
 from typing import Literal
 
 from jablotronpy import (
     Jablotron,
-    JablotronApiException,
     JablotronProgrammableGates,
     JablotronSections,
     JablotronService,
@@ -18,23 +16,9 @@ from jablotronpy import (
     UnauthorizedException,
 )
 
-from .const import SESSION_MAX_AGE
 from .types import JablotronServiceData
 
 _LOGGER = logging.getLogger(__name__)
-
-try:
-    from jablotronpy import TooManyRequestsException  # type: ignore[attr-defined]
-except ImportError:
-
-    class TooManyRequestsException(JablotronApiException):  # type: ignore[no-redef]
-        """Exception raised when request fails with 429 status code.
-
-        Fallback definition until jablotronpy ships 429 support.
-        Remove once the upstream release is pinned in manifest.json.
-        """
-
-        retry_after: int | None = None
 
 
 class JablotronClient:
@@ -59,7 +43,6 @@ class JablotronClient:
         self._bridge = Jablotron(username, password, default_pin)
         self._login_lock = threading.Lock()
         self._session_generation = 0
-        self._session_created_at = 0.0
 
     def get_default_pin(self) -> str | None:
         """Return the default PIN code."""
@@ -74,21 +57,19 @@ class JablotronClient:
     def _ensure_logged_in(self) -> int:
         """Log in when there is no valid session and return the current session generation.
 
-        The session is refreshed proactively once it approaches the server-side
-        expiry (~30 minutes) so that regular polling never hits an expired session.
-        Must only be called from executor threads.
+        The session is reused until an API call fails with an expired session;
+        there is no time-based refresh, so no login request is spent while the
+        session stays valid. Must only be called from executor threads.
         """
 
         with self._login_lock:
-            session_age = time.monotonic() - self._session_created_at
-            if self._session_generation == 0 or session_age > SESSION_MAX_AGE:
+            if self._session_generation == 0:
                 _LOGGER.debug("Logging in to Jablotron Cloud")
                 # Recreate the bridge so the login request is not sent with a stale session
                 # cookie, which could prevent the API from issuing a fresh session id
                 self._bridge = Jablotron(self._username, self._password, self._default_pin)
                 self._bridge.perform_login()
                 self._session_generation += 1
-                self._session_created_at = time.monotonic()
             return self._session_generation
 
     def _invalidate_session(self, generation: int) -> None:

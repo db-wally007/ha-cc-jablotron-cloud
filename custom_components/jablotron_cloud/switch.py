@@ -13,6 +13,7 @@ from jablotronpy import (
     JablotronApiException,
     JablotronProgrammableGatesGate,
     SessionExpiredException,
+    TooManyRequestsException,
     UnauthorizedException,
 )
 from requests import RequestException
@@ -25,7 +26,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from . import JablotronClient, JablotronConfigEntry, JablotronData, JablotronDataCoordinator
 from .const import DOMAIN
 from .entity import JablotronEntity
-from .jablotron import TooManyRequestsException
 from .utils import get_component_state, pg_state_to_binary_state
 
 _LOGGER = logging.getLogger(__name__)
