@@ -6,17 +6,8 @@ from asyncio import timeout
 from dataclasses import dataclass
 from datetime import timedelta
 import logging
-from time import monotonic
 
-from jablotronpy import (
-    BadRequestException,
-    InvalidSessionIdException,
-    JablotronApiException,
-    SessionExpiredException,
-    TooManyRequestsException,
-    UnauthorizedException,
-)
-from requests import RequestException
+from jablotronpy import TooManyRequestsException, UnauthorizedException
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -144,7 +135,6 @@ class JablotronDataCoordinator(DataUpdateCoordinator):
         self._scan_interval = scan_interval
         self._scan_timeout = scan_timeout
         self._capabilities: dict[int, JablotronServiceCapabilities] = {}
-        self._backoff_until = 0.0
 
         # Initialize data update coordinator
         super().__init__(
@@ -226,21 +216,11 @@ class JablotronDataCoordinator(DataUpdateCoordinator):
                 )
         except UnauthorizedException as ex:
             raise ConfigEntryAuthFailed(ex) from ex
-        except (
-            BadRequestException,
-            InvalidSessionIdException,
-            JablotronApiException,
-            RequestException,
-            SessionExpiredException,
-        ) as ex:
+        except Exception as ex:
             raise UpdateFailed(f"Error communicating with Jablotron Cloud: {ex}") from ex
 
     async def _async_update_data(self) -> None:
         """Update data for all platforms."""
-
-        # Skip polling entirely while the API rate limit backoff is active
-        if monotonic() < self._backoff_until:
-            raise UpdateFailed("Jablotron Cloud API rate limit reached, waiting before polling again")
 
         try:
             # Update data within a certain time limit
@@ -280,15 +260,13 @@ class JablotronDataCoordinator(DataUpdateCoordinator):
         except UnauthorizedException as ex:
             raise ConfigEntryAuthFailed(ex) from ex
         except TooManyRequestsException as ex:
-            # Honor the Retry-After header by making zero API calls until the backoff expires
+            # Honor the Retry-After header by pausing polling until the backoff expires
             retry_after = ex.retry_after or self._scan_interval
-            self._backoff_until = monotonic() + retry_after
+            self.update_interval = timedelta(seconds=retry_after)
             raise UpdateFailed(f"Jablotron Cloud API rate limit reached, backing off for {retry_after} seconds") from ex
-        except (
-            BadRequestException,
-            InvalidSessionIdException,
-            JablotronApiException,
-            RequestException,
-            SessionExpiredException,
-        ) as ex:
+        except Exception as ex:
             raise UpdateFailed(f"Error communicating with Jablotron Cloud: {ex}") from ex
+
+        # Restore the regular polling cadence after a successful update, in case a
+        # rate limit backoff stretched the update interval.
+        self.update_interval = timedelta(seconds=self._scan_interval)

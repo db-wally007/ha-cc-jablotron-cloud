@@ -5,16 +5,7 @@ from __future__ import annotations
 from functools import partial
 import logging
 
-from jablotronpy import (
-    BadRequestException,
-    IncorrectPinCodeException,
-    InvalidSessionIdException,
-    JablotronApiException,
-    SessionExpiredException,
-    TooManyRequestsException,
-    UnauthorizedException,
-)
-from requests import RequestException
+from jablotronpy import IncorrectPinCodeException, TooManyRequestsException, UnauthorizedException
 
 from homeassistant.components.alarm_control_panel import (
     AlarmControlPanelEntity,
@@ -155,13 +146,7 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
         except TooManyRequestsException as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
-        except (
-            BadRequestException,
-            InvalidSessionIdException,
-            JablotronApiException,
-            RequestException,
-            SessionExpiredException,
-        ) as ex:
+        except Exception as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="alarm_control_failed") from ex
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
@@ -194,13 +179,7 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
         except TooManyRequestsException as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
-        except (
-            BadRequestException,
-            InvalidSessionIdException,
-            JablotronApiException,
-            RequestException,
-            SessionExpiredException,
-        ) as ex:
+        except Exception as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="alarm_control_failed") from ex
 
     async def async_alarm_arm_home(self, code: str | None = None) -> None:
@@ -236,13 +215,7 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
         except TooManyRequestsException as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
-        except (
-            BadRequestException,
-            InvalidSessionIdException,
-            JablotronApiException,
-            RequestException,
-            SessionExpiredException,
-        ) as ex:
+        except Exception as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="alarm_control_failed") from ex
 
     @callback

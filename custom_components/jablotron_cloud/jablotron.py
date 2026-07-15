@@ -38,11 +38,10 @@ class JablotronClient:
         self._username = username
         self._password = password
         self._default_pin = default_pin
-        # The bridge instance persists between logins so the session cookie set by
-        # perform_login() is reused across calls; it is recreated on each login.
-        self._bridge = Jablotron(username, password, default_pin)
+        # The bridge doubles as the session marker: None means not logged in, and a
+        # bridge instance carries the session cookie set by perform_login().
+        self._bridge: Jablotron | None = None
         self._login_lock = threading.Lock()
-        self._session_generation = 0
 
     def get_default_pin(self) -> str | None:
         """Return the default PIN code."""
@@ -54,8 +53,8 @@ class JablotronClient:
 
         self._ensure_logged_in()
 
-    def _ensure_logged_in(self) -> int:
-        """Log in when there is no valid session and return the current session generation.
+    def _ensure_logged_in(self) -> Jablotron:
+        """Return a logged-in bridge, performing a login when there is none.
 
         The session is reused until an API call fails with an expired session;
         there is no time-based refresh, so no login request is spent while the
@@ -63,21 +62,22 @@ class JablotronClient:
         """
 
         with self._login_lock:
-            if self._session_generation == 0:
+            if self._bridge is None:
                 _LOGGER.debug("Logging in to Jablotron Cloud")
-                # Recreate the bridge so the login request is not sent with a stale session
-                # cookie, which could prevent the API from issuing a fresh session id
-                self._bridge = Jablotron(self._username, self._password, self._default_pin)
-                self._bridge.perform_login()
-                self._session_generation += 1
-            return self._session_generation
+                # A fresh bridge is created for every login so the login request is not sent
+                # with a stale session cookie, and it is assigned only after the login
+                # succeeds, so a failed login never leaves a broken session behind.
+                bridge = Jablotron(self._username, self._password, self._default_pin)
+                bridge.perform_login()
+                self._bridge = bridge
+            return self._bridge
 
-    def _invalidate_session(self, generation: int) -> None:
-        """Invalidate the session unless another thread re-logged in in the meantime."""
+    def _invalidate_session(self, bridge: Jablotron) -> None:
+        """Drop the bridge unless another thread already re-logged in with a new one."""
 
         with self._login_lock:
-            if self._session_generation == generation:
-                self._session_generation = 0
+            if self._bridge is bridge:
+                self._bridge = None
 
     def _api_call[T](self, func: Callable[[Jablotron], T]) -> T:
         """Run an API call, transparently re-logging in once when the session is no longer valid.
@@ -87,14 +87,13 @@ class JablotronClient:
         UnauthorizedException, which is the only way an auth error propagates to callers.
         """
 
-        generation = self._ensure_logged_in()
+        bridge = self._ensure_logged_in()
         try:
-            return func(self._bridge)
+            return func(bridge)
         except (SessionExpiredException, UnauthorizedException):
             _LOGGER.debug("Jablotron Cloud session is no longer valid, re-logging in and retrying")
-            self._invalidate_session(generation)
-            self._ensure_logged_in()
-            return func(self._bridge)
+            self._invalidate_session(bridge)
+            return func(self._ensure_logged_in())
 
     def get_services(self) -> list[JablotronService]:
         """Return list of services associated with the Jablotron Cloud account."""

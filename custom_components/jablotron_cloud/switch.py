@@ -7,16 +7,11 @@ import logging
 from typing import Any
 
 from jablotronpy import (
-    BadRequestException,
     IncorrectPinCodeException,
-    InvalidSessionIdException,
-    JablotronApiException,
     JablotronProgrammableGatesGate,
-    SessionExpiredException,
     TooManyRequestsException,
     UnauthorizedException,
 )
-from requests import RequestException
 
 from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.core import HomeAssistant, callback
@@ -128,13 +123,7 @@ class JablotronProgrammableGate(JablotronEntity, SwitchEntity):
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
         except TooManyRequestsException as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
-        except (
-            BadRequestException,
-            InvalidSessionIdException,
-            JablotronApiException,
-            RequestException,
-            SessionExpiredException,
-        ) as ex:
+        except Exception as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="switch_control_failed") from ex
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -160,13 +149,7 @@ class JablotronProgrammableGate(JablotronEntity, SwitchEntity):
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
         except TooManyRequestsException as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
-        except (
-            BadRequestException,
-            InvalidSessionIdException,
-            JablotronApiException,
-            RequestException,
-            SessionExpiredException,
-        ) as ex:
+        except Exception as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="switch_control_failed") from ex
 
     @callback
