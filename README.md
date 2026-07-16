@@ -19,6 +19,10 @@ It does not require a direct connection to the alarm control panel to run, inste
 MyJablotron and takes advantage of the mobile API provided by the [JablotronPy](https://github.com/fdegier/JablotronPy)
 library.
 
+# Support
+
+![Buy me a coffee QR](https://github.com/Pigotka/ha-cc-jablotron-cloud/blob/main/bmc_qr.png)
+
 ## Supported entities
 
 The integration uses the following entities to enable monitoring and control of individual components of the Jablotron
@@ -116,6 +120,4 @@ Example automation that fires whenever any alarm panel is triggered:
 * **Historical events are not used.** The cloud-side event history endpoint (`eventHistoryGet`) returns
   `400 METHOD.NOT-SUPPORTED` on several panel models (e.g. JA100F), so it is not relied on as a fallback.
 
-# Support
 
-![Buy me a coffee QR](https://github.com/Pigotka/ha-cc-jablotron-cloud/blob/main/bmc_qr.png)
