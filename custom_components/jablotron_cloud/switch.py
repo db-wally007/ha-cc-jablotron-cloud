@@ -7,9 +7,9 @@ import logging
 from typing import Any
 
 from jablotronpy import (
-    BadRequestException,
     IncorrectPinCodeException,
     JablotronProgrammableGatesGate,
+    TooManyRequestsException,
     UnauthorizedException,
 )
 
@@ -104,10 +104,9 @@ class JablotronProgrammableGate(JablotronEntity, SwitchEntity):
         """Send turn on request."""
         try:
             _LOGGER.debug("Sending turn on for gate '%s' (service %d)", self._gate_name, self._service_id)
-            bridge = await self.hass.async_add_executor_job(self._client.get_bridge)
             turn_on_successful = await self.hass.async_add_executor_job(
                 partial(
-                    bridge.control_programmable_gate,
+                    self._client.control_programmable_gate,
                     service_id=self._service_id,
                     service_type=self._service_type,
                     component_id=self._gate_id,
@@ -122,17 +121,18 @@ class JablotronProgrammableGate(JablotronEntity, SwitchEntity):
             raise ConfigEntryAuthFailed(ex) from ex
         except IncorrectPinCodeException as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
-        except BadRequestException as ex:
+        except TooManyRequestsException as ex:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
+        except Exception as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="switch_control_failed") from ex
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Send turn off request."""
         try:
             _LOGGER.debug("Sending turn off for gate '%s' (service %d)", self._gate_name, self._service_id)
-            bridge = await self.hass.async_add_executor_job(self._client.get_bridge)
             turn_off_successful = await self.hass.async_add_executor_job(
                 partial(
-                    bridge.control_programmable_gate,
+                    self._client.control_programmable_gate,
                     service_id=self._service_id,
                     service_type=self._service_type,
                     component_id=self._gate_id,
@@ -147,7 +147,9 @@ class JablotronProgrammableGate(JablotronEntity, SwitchEntity):
             raise ConfigEntryAuthFailed(ex) from ex
         except IncorrectPinCodeException as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
-        except BadRequestException as ex:
+        except TooManyRequestsException as ex:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
+        except Exception as ex:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="switch_control_failed") from ex
 
     @callback

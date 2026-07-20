@@ -47,8 +47,14 @@
         "invalid_pin": {
             "message": "The entered pin code is not valid!"
         },
+        "alarm_control_failed": {
+            "message": "Failed to control alarm section!"
+        },
         "control_failed": {
             "message": "Failed to control thermo device!"
+        },
+        "rate_limited": {
+            "message": "Jablotron Cloud API rate limit reached, please try again later!"
         },
         "switch_control_failed": {
             "message": "Failed to control programmable gate!"

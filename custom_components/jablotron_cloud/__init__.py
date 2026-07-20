@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 import logging
 
-from jablotronpy import Jablotron, UnauthorizedException
+from jablotronpy import TooManyRequestsException, UnauthorizedException
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -21,11 +21,11 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.entity_registry import async_migrate_entries
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import PLATFORMS, UNSUPPORTED_SERVICES
 from .jablotron import JablotronClient
-from .types import JablotronServiceData
+from .types import JablotronServiceCapabilities, JablotronServiceData
 from .utils import update_unique_id
 
 _LOGGER = logging.getLogger(__name__)
@@ -132,7 +132,9 @@ class JablotronDataCoordinator(DataUpdateCoordinator):
 
         # Define coordinator attributes
         self._client = client
+        self._scan_interval = scan_interval
         self._scan_timeout = scan_timeout
+        self._capabilities: dict[int, JablotronServiceCapabilities] = {}
 
         # Initialize data update coordinator
         super().__init__(
@@ -148,8 +150,7 @@ class JablotronDataCoordinator(DataUpdateCoordinator):
         try:
             # Get available services from Jablotron Cloud
             _LOGGER.debug("Discovering available Jablotron services")
-            bridge: Jablotron = await self.hass.async_add_executor_job(self._client.get_bridge)
-            services = await self.hass.async_add_executor_job(bridge.get_services)
+            services = await self.hass.async_add_executor_job(self._client.get_services)
 
             # Log that no services were discovered
             if not services:
@@ -174,7 +175,7 @@ class JablotronDataCoordinator(DataUpdateCoordinator):
                 # Get additional service data
                 _LOGGER.debug("Fetching additional data for service '%d'", service_id)
                 self._client.services[service_id]["firmware"] = (
-                    (await self.hass.async_add_executor_job(bridge.get_service_information, service_id))
+                    (await self.hass.async_add_executor_job(self._client.get_service_information, service_id))
                     .get("device", {})
                     .get("firmware", "N/A")
                 )
@@ -182,19 +183,28 @@ class JablotronDataCoordinator(DataUpdateCoordinator):
                 # Get available sections from Jablotron Cloud
                 _LOGGER.debug("Discovering available sections for service '%d'", service_id)
                 self._client.services[service_id]["alarm"] = await self.hass.async_add_executor_job(
-                    bridge.get_sections, service_id, service_type
+                    self._client.get_sections, service_id, service_type
                 )
 
                 # Get available gates from Jablotron Cloud
                 _LOGGER.debug("Discovering available gates for service '%d'", service_id)
                 self._client.services[service_id]["gates"] = await self.hass.async_add_executor_job(
-                    bridge.get_programmable_gates, service_id, service_type
+                    self._client.get_programmable_gates, service_id, service_type
                 )
 
                 # Get available thermo devices from Jablotron Cloud
                 _LOGGER.debug("Discovering available thermo devices for service '%d'", service_id)
                 self._client.services[service_id]["thermo"] = await self.hass.async_add_executor_job(
-                    bridge.get_thermo_devices, service_id, service_type
+                    self._client.get_thermo_devices, service_id, service_type
+                )
+
+                # Remember which endpoints returned data so polling can skip the empty ones.
+                # Devices added to the installation later are only picked up after a reload,
+                # which matches how entities themselves are only discovered during setup.
+                self._capabilities[service_id] = JablotronServiceCapabilities(
+                    has_gates=bool(self._client.services[service_id]["gates"].get("programmableGates")),
+                    has_sections=bool(self._client.services[service_id]["alarm"].get("sections")),
+                    has_thermo=bool(self._client.services[service_id]["thermo"]),
                 )
 
                 _LOGGER.debug(
@@ -206,6 +216,8 @@ class JablotronDataCoordinator(DataUpdateCoordinator):
                 )
         except UnauthorizedException as ex:
             raise ConfigEntryAuthFailed(ex) from ex
+        except Exception as ex:
+            raise UpdateFailed(f"Error communicating with Jablotron Cloud: {ex}") from ex
 
     async def _async_update_data(self) -> None:
         """Update data for all platforms."""
@@ -213,32 +225,33 @@ class JablotronDataCoordinator(DataUpdateCoordinator):
         try:
             # Update data within a certain time limit
             async with timeout(self._scan_timeout):
-                # Get fresh Jablotron Cloud session
+                # Update data for all available services reusing the persistent session
                 _LOGGER.debug("Updating data for available Jablotron services")
-                bridge: Jablotron = await self.hass.async_add_executor_job(self._client.get_bridge)
-
-                # Update data for all available services
                 for service_id in self._client.services:
                     # Get service details
                     service_type = self._client.services[service_id]["type"]
+                    capabilities = self._capabilities[service_id]
 
                     # Update sections data from Jablotron Cloud
-                    _LOGGER.debug("Updating sections data for service '%d'", service_id)
-                    self._client.services[service_id]["alarm"] = await self.hass.async_add_executor_job(
-                        bridge.get_sections, service_id, service_type
-                    )
+                    if capabilities.has_sections:
+                        _LOGGER.debug("Updating sections data for service '%d'", service_id)
+                        self._client.services[service_id]["alarm"] = await self.hass.async_add_executor_job(
+                            self._client.get_sections, service_id, service_type
+                        )
 
                     # Update gates data from Jablotron Cloud
-                    _LOGGER.debug("Updating gates data for service '%d'", service_id)
-                    self._client.services[service_id]["gates"] = await self.hass.async_add_executor_job(
-                        bridge.get_programmable_gates, service_id, service_type
-                    )
+                    if capabilities.has_gates:
+                        _LOGGER.debug("Updating gates data for service '%d'", service_id)
+                        self._client.services[service_id]["gates"] = await self.hass.async_add_executor_job(
+                            self._client.get_programmable_gates, service_id, service_type
+                        )
 
                     # Update thermo devices data from Jablotron Cloud
-                    _LOGGER.debug("Updating thermo devices data for service '%d'", service_id)
-                    self._client.services[service_id]["thermo"] = await self.hass.async_add_executor_job(
-                        bridge.get_thermo_devices, service_id, service_type
-                    )
+                    if capabilities.has_thermo:
+                        _LOGGER.debug("Updating thermo devices data for service '%d'", service_id)
+                        self._client.services[service_id]["thermo"] = await self.hass.async_add_executor_job(
+                            self._client.get_thermo_devices, service_id, service_type
+                        )
 
                     _LOGGER.debug(
                         "Successfully updated platforms data for service '%d'",
@@ -246,3 +259,14 @@ class JablotronDataCoordinator(DataUpdateCoordinator):
                     )
         except UnauthorizedException as ex:
             raise ConfigEntryAuthFailed(ex) from ex
+        except TooManyRequestsException as ex:
+            # Honor the Retry-After header by pausing polling until the backoff expires
+            retry_after = ex.retry_after or self._scan_interval
+            self.update_interval = timedelta(seconds=retry_after)
+            raise UpdateFailed(f"Jablotron Cloud API rate limit reached, backing off for {retry_after} seconds") from ex
+        except Exception as ex:
+            raise UpdateFailed(f"Error communicating with Jablotron Cloud: {ex}") from ex
+
+        # Restore the regular polling cadence after a successful update, in case a
+        # rate limit backoff stretched the update interval.
+        self.update_interval = timedelta(seconds=self._scan_interval)

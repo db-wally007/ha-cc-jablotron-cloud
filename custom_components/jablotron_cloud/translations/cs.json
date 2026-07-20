@@ -47,8 +47,14 @@
         "invalid_pin": {
             "message": "Zadaný PIN kód není platný!"
         },
+        "alarm_control_failed": {
+            "message": "Nepodařilo se ovládat sekci alarmu!"
+        },
         "control_failed": {
             "message": "Nepodařilo se ovládat termo zařízení!"
+        },
+        "rate_limited": {
+            "message": "Byl dosažen limit požadavků na Jablotron Cloud API, zkuste to prosím později!"
         },
         "switch_control_failed": {
             "message": "Nepodařilo se ovládat programovatelnou bránu!"

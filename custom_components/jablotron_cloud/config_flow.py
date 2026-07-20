@@ -81,7 +81,7 @@ def validate_credentials(user_input: dict) -> None:
 
     # Initialize Jablotron client and validate entered credentials
     client = JablotronClient(user_input[CONF_USERNAME], user_input[CONF_PASSWORD])
-    client.get_bridge()
+    client.validate_login()
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):

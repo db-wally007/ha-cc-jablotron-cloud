@@ -6,7 +6,7 @@ from functools import partial
 import logging
 from typing import Any
 
-from jablotronpy import UnauthorizedException
+from jablotronpy import TooManyRequestsException, UnauthorizedException
 
 from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACAction, HVACMode
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
@@ -141,14 +141,13 @@ class JablotronClimate(JablotronEntity, ClimateEntity):
                 self._thermo_device_id,
                 self._service_id,
             )
-            bridge = await self.hass.async_add_executor_job(self._client.get_bridge)
 
             # When turning on from OFF/STAND_BY, wake the device first before setting the actual mode
             if self._attr_hvac_mode == HVACMode.OFF and hvac_mode != HVACMode.OFF:
                 _LOGGER.debug("Waking thermo device '%s' before mode change", self._thermo_device_id)
                 wake_success = await self.hass.async_add_executor_job(
                     partial(
-                        bridge.control_thermo_device,
+                        self._client.control_thermo_device,
                         service_id=self._service_id,
                         object_device_id=self._thermo_device_id,
                         heating_mode="ON",
@@ -161,7 +160,7 @@ class JablotronClimate(JablotronEntity, ClimateEntity):
 
             success = await self.hass.async_add_executor_job(
                 partial(
-                    bridge.control_thermo_device,
+                    self._client.control_thermo_device,
                     service_id=self._service_id,
                     object_device_id=self._thermo_device_id,
                     heating_mode=heating_mode,
@@ -176,6 +175,8 @@ class JablotronClimate(JablotronEntity, ClimateEntity):
                 _LOGGER.error("Failed to set heating mode for device '%s'", self._thermo_device_id)
         except UnauthorizedException as ex:
             raise ConfigEntryAuthFailed(ex) from ex
+        except TooManyRequestsException as ex:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
         except Exception as ex:
             _LOGGER.exception("Failed to control thermo device '%s'", self._thermo_device_id)
             raise HomeAssistantError(
@@ -197,10 +198,9 @@ class JablotronClimate(JablotronEntity, ClimateEntity):
                 self._thermo_device_id,
                 self._service_id,
             )
-            bridge = await self.hass.async_add_executor_job(self._client.get_bridge)
             success = await self.hass.async_add_executor_job(
                 partial(
-                    bridge.control_thermo_device,
+                    self._client.control_thermo_device,
                     service_id=self._service_id,
                     object_device_id=self._thermo_device_id,
                     temperature=temperature,
@@ -215,6 +215,8 @@ class JablotronClimate(JablotronEntity, ClimateEntity):
                 _LOGGER.error("Failed to set temperature for device '%s'", self._thermo_device_id)
         except UnauthorizedException as ex:
             raise ConfigEntryAuthFailed(ex) from ex
+        except TooManyRequestsException as ex:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
         except Exception as ex:
             _LOGGER.exception("Failed to set temperature for thermo device '%s'", self._thermo_device_id)
             raise HomeAssistantError(
