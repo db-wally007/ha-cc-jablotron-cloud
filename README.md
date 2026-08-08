@@ -153,7 +153,7 @@ If you want to name the door or window, correlate the section with your own cont
 ## Alarm event detection
 
 The integration surfaces an active alarm by flipping the affected `alarm_control_panel` entity to the
-`triggered` state. Detection is **per section** - when an alarm is in progress, the Jablotron Cloud API
+`triggered` state. Detection is **per section** — when an alarm is in progress, the Jablotron Cloud API
 returns an event with a message such as `"Alarm - Periphery PIR chodba (wifi), Section Dům"`. The
 integration parses the section name from the substring after the `, Section ` token and only the matching
 section is reported as `triggered`. Other sections of the same service stay in their previous state.
@@ -194,3 +194,5 @@ Example automation that fires whenever any alarm panel is triggered:
   with a redacted log sample if you observe this.
 * **Historical events are not used.** The cloud-side event history endpoint (`eventHistoryGet`) returns
   `400 METHOD.NOT-SUPPORTED` on several panel models (e.g. JA100F), so it is not relied on as a fallback.
+
+
