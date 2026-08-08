@@ -152,13 +152,20 @@ class JablotronClient:
 
         return self._api_call(
             lambda bridge: self._control_section(
-                bridge, service_id, component_id, state, pin_code, service_type, force
+                bridge,
+                service_id=service_id,
+                component_id=component_id,
+                state=state,
+                pin_code=pin_code,
+                service_type=service_type,
+                force=force,
             )
         )
 
     @staticmethod
     def _control_section(
         bridge: Jablotron,
+        *,
         service_id: int,
         component_id: str,
         state: Literal["ARM", "PARTIAL_ARM", "DISARM"],
