@@ -1,6 +1,7 @@
 """Client for Jablotron Cloud API."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from functools import wraps
 import logging
 import sys
@@ -100,7 +101,25 @@ class JablotronClient:
         # the panel has not accepted anything yet — and that accurate-but-premature reading
         # lands on top of the assumed transition. Commands wait for an in-flight poll and
         # polls wait for an in-flight command; REQUEST_TIMEOUT_SECONDS bounds either wait.
-        self._api_lock = threading.Lock()
+        #
+        # Reentrant because the operations that must be atomic span several API calls, each
+        # of which locks again on its own: see exclusive().
+        self._api_lock = threading.RLock()
+
+    @contextmanager
+    def exclusive(self) -> Iterator[None]:
+        """Hold the cloud connection for an operation that spans several requests.
+
+        Locking each request individually is not enough whenever a sequence of them has to
+        be treated as one, because the gaps between them are exactly where a poll and a
+        command interleave. Two such sequences exist: a control request and its retries
+        (the backoff between attempts is a gap), and a full poll sweep (a command slipping
+        between the section and gate requests would afterwards be undone by section data
+        that was read before it ran). Must only be used from executor threads.
+        """
+
+        with self._api_lock:
+            yield
 
     def get_default_pin(self) -> str | None:
         """Return the default PIN code."""
@@ -209,43 +228,48 @@ class JablotronClient:
           * a rate limit, where retrying is precisely what the cloud is asking us to stop.
         """
 
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                return self._api_call(
-                    lambda bridge: self._control_section(
-                        bridge,
-                        service_id=service_id,
-                        component_id=component_id,
-                        state=state,
-                        pin_code=pin_code,
-                        service_type=service_type,
-                        force=force,
+        # The retries are inside the exclusive block, not around it: releasing between
+        # attempts would let a poll run during the backoff and report the section as it was
+        # before the command, which is the very interleaving this serialisation exists to
+        # prevent. A command therefore holds the connection until it has finished retrying.
+        with self.exclusive():
+            attempt = 0
+            while True:
+                attempt += 1
+                try:
+                    return self._api_call(
+                        lambda bridge: self._control_section(
+                            bridge,
+                            service_id=service_id,
+                            component_id=component_id,
+                            state=state,
+                            pin_code=pin_code,
+                            service_type=service_type,
+                            force=force,
+                        )
                     )
-                )
-            except (IncorrectPinCodeException, UnauthorizedException, TooManyRequestsException):
-                raise
-            except Exception as ex:  # noqa: BLE001
-                if attempt >= CONTROL_ATTEMPTS:
-                    _LOGGER.error(
-                        "Control request '%s' for section '%s' failed on all %d attempts: %s",
+                except (IncorrectPinCodeException, UnauthorizedException, TooManyRequestsException):
+                    raise
+                except Exception as ex:  # noqa: BLE001
+                    if attempt >= CONTROL_ATTEMPTS:
+                        _LOGGER.error(
+                            "Control request '%s' for section '%s' failed on all %d attempts: %s",
+                            state,
+                            component_id,
+                            CONTROL_ATTEMPTS,
+                            ex,
+                        )
+                        raise
+                    _LOGGER.warning(
+                        "Control request '%s' for section '%s' failed on attempt %d/%d (%s), retrying in %ss",
                         state,
                         component_id,
+                        attempt,
                         CONTROL_ATTEMPTS,
                         ex,
+                        CONTROL_RETRY_DELAY_SECONDS,
                     )
-                    raise
-                _LOGGER.warning(
-                    "Control request '%s' for section '%s' failed on attempt %d/%d (%s), retrying in %ss",
-                    state,
-                    component_id,
-                    attempt,
-                    CONTROL_ATTEMPTS,
-                    ex,
-                    CONTROL_RETRY_DELAY_SECONDS,
-                )
-                time.sleep(CONTROL_RETRY_DELAY_SECONDS)
+                    time.sleep(CONTROL_RETRY_DELAY_SECONDS)
 
     @staticmethod
     def _control_section(

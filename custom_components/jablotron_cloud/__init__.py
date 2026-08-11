@@ -222,11 +222,18 @@ class JablotronDataCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> None:
         """Update data for all platforms."""
 
-        try:
-            # Update data within a certain time limit
-            async with timeout(self._scan_timeout):
-                # Update data for all available services reusing the persistent session
-                _LOGGER.debug("Updating data for available Jablotron services")
+        def update_all_services() -> None:
+            """Refresh every service in one exclusive block.
+
+            The whole sweep is a single executor job holding the client lock, rather than one
+            job per request. With a job per request a command could slip into the gap between
+            the section and gate requests, and the section data read before it ran would then
+            be handed to the entities afterwards — silently undoing the command that had just
+            succeeded. Reading everything under one lock makes a poll either entirely before
+            or entirely after a command, never straddling it.
+            """
+
+            with self._client.exclusive():
                 for service_id in self._client.services:
                     # Get service details
                     service_type = self._client.services[service_id]["type"]
@@ -235,28 +242,35 @@ class JablotronDataCoordinator(DataUpdateCoordinator):
                     # Update sections data from Jablotron Cloud
                     if capabilities.has_sections:
                         _LOGGER.debug("Updating sections data for service '%d'", service_id)
-                        self._client.services[service_id]["alarm"] = await self.hass.async_add_executor_job(
-                            self._client.get_sections, service_id, service_type
+                        self._client.services[service_id]["alarm"] = self._client.get_sections(
+                            service_id, service_type
                         )
 
                     # Update gates data from Jablotron Cloud
                     if capabilities.has_gates:
                         _LOGGER.debug("Updating gates data for service '%d'", service_id)
-                        self._client.services[service_id]["gates"] = await self.hass.async_add_executor_job(
-                            self._client.get_programmable_gates, service_id, service_type
+                        self._client.services[service_id]["gates"] = self._client.get_programmable_gates(
+                            service_id, service_type
                         )
 
                     # Update thermo devices data from Jablotron Cloud
                     if capabilities.has_thermo:
                         _LOGGER.debug("Updating thermo devices data for service '%d'", service_id)
-                        self._client.services[service_id]["thermo"] = await self.hass.async_add_executor_job(
-                            self._client.get_thermo_devices, service_id, service_type
+                        self._client.services[service_id]["thermo"] = self._client.get_thermo_devices(
+                            service_id, service_type
                         )
 
                     _LOGGER.debug(
                         "Successfully updated platforms data for service '%d'",
                         service_id,
                     )
+
+        try:
+            # Update data within a certain time limit
+            async with timeout(self._scan_timeout):
+                # Update data for all available services reusing the persistent session
+                _LOGGER.debug("Updating data for available Jablotron services")
+                await self.hass.async_add_executor_job(update_all_services)
         except UnauthorizedException as ex:
             raise ConfigEntryAuthFailed(ex) from ex
         except TooManyRequestsException as ex:
