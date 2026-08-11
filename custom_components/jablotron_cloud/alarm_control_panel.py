@@ -123,12 +123,43 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
         """Whether code is required for arm actions."""
         return self._authorization_required
 
+    @callback
+    def _assume_transition(self, transition: AlarmControlPanelState) -> AlarmControlPanelState:
+        """Show a transition state immediately and return the state it replaced.
+
+        The write happens BEFORE the cloud request rather than after it. Jablotron Cloud
+        takes 2-5s to answer, and reporting the transition only once it does leaves every
+        Home Assistant surface — dashboards, the more-info dialog, CarPlay, Siri, widgets —
+        showing the stale previous state for those seconds, with no indication the command
+        was even received. Writing first is the standard optimistic pattern and gives every
+        surface feedback at once, because it is the ENTITY that reports it.
+
+        The caller restores the returned state if the request raises. A response that simply
+        fails to confirm is NOT treated as a failure: jablotronpy's success flag requires the
+        section to already report the requested state, which it cannot do while the panel is
+        in its exit delay, so trusting it here would revert perfectly good arm commands.
+        """
+
+        previous_state = self._attr_alarm_state
+        self._attr_alarm_state = transition
+        self.async_write_ha_state()
+
+        return previous_state
+
+    @callback
+    def _revert_transition(self, previous_state: AlarmControlPanelState) -> None:
+        """Put the assumed transition back after a failed request."""
+
+        self._attr_alarm_state = previous_state
+        self.async_write_ha_state()
+
     async def async_alarm_disarm(self, code: str | None = None) -> None:
         """Send disarm request."""
+        previous_state = self._assume_transition(AlarmControlPanelState.DISARMING)
         try:
             code = self.code_or_default_code(code)
             _LOGGER.debug("Sending disarm for section '%s' (service %d)", self._section_name, self._service_id)
-            disarm_result = await self.hass.async_add_executor_job(
+            await self.hass.async_add_executor_job(
                 partial(
                     self._client.control_section,
                     service_id=self._service_id,
@@ -138,20 +169,22 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
                     pin_code=code,
                 )
             )
-            if disarm_result.success:
-                self._attr_alarm_state = AlarmControlPanelState.DISARMING
-                self.async_write_ha_state()
         except UnauthorizedException as ex:
+            self._revert_transition(previous_state)
             raise ConfigEntryAuthFailed(ex) from ex
         except IncorrectPinCodeException as ex:
+            self._revert_transition(previous_state)
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
         except TooManyRequestsException as ex:
+            self._revert_transition(previous_state)
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
         except Exception as ex:
+            self._revert_transition(previous_state)
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="alarm_control_failed") from ex
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
         """Send arm request."""
+        previous_state = self._assume_transition(AlarmControlPanelState.ARMING)
         try:
             code = self.code_or_default_code(code)
             _LOGGER.debug(
@@ -171,18 +204,19 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
                     force=self._client.force_arm,
                 )
             )
-            if arm_result.success:
-                self._attr_alarm_state = AlarmControlPanelState.ARMING
-                self.async_write_ha_state()
             if arm_result.bypassed:
                 self._report_bypass(arm_result.control_error)
         except UnauthorizedException as ex:
+            self._revert_transition(previous_state)
             raise ConfigEntryAuthFailed(ex) from ex
         except IncorrectPinCodeException as ex:
+            self._revert_transition(previous_state)
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
         except TooManyRequestsException as ex:
+            self._revert_transition(previous_state)
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
         except Exception as ex:
+            self._revert_transition(previous_state)
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="alarm_control_failed") from ex
 
     async def async_alarm_arm_home(self, code: str | None = None) -> None:
@@ -190,6 +224,7 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
         if not self._supports_partial_arm:
             return
 
+        previous_state = self._assume_transition(AlarmControlPanelState.ARMING)
         try:
             code = self.code_or_default_code(code)
             _LOGGER.debug(
@@ -209,18 +244,19 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
                     force=self._client.force_arm,
                 )
             )
-            if arm_result.success:
-                self._attr_alarm_state = AlarmControlPanelState.ARMING
-                self.async_write_ha_state()
             if arm_result.bypassed:
                 self._report_bypass(arm_result.control_error)
         except UnauthorizedException as ex:
+            self._revert_transition(previous_state)
             raise ConfigEntryAuthFailed(ex) from ex
         except IncorrectPinCodeException as ex:
+            self._revert_transition(previous_state)
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="invalid_pin") from ex
         except TooManyRequestsException as ex:
+            self._revert_transition(previous_state)
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
         except Exception as ex:
+            self._revert_transition(previous_state)
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="alarm_control_failed") from ex
 
     @callback

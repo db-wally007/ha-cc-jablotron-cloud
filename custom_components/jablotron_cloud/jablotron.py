@@ -3,9 +3,11 @@
 from collections.abc import Callable
 import logging
 import threading
+import time
 from typing import Literal
 
 from jablotronpy import (
+    IncorrectPinCodeException,
     Jablotron,
     JablotronProgrammableGates,
     JablotronSectionControlResponse,
@@ -14,6 +16,7 @@ from jablotronpy import (
     JablotronServiceInformation,
     JablotronThermoDevice,
     SessionExpiredException,
+    TooManyRequestsException,
     UnauthorizedException,
 )
 
@@ -21,6 +24,13 @@ from .const import BYPASS_CONTROL_ERRORS
 from .types import JablotronSectionControlResult, JablotronServiceData
 
 _LOGGER = logging.getLogger(__name__)
+
+# How many times a section control request is attempted before giving up, and how long to
+# wait between attempts. control_section() runs in an executor thread, so the sleep blocks
+# only that worker. Three attempts spaced 2s apart keep the worst case (~4s of waiting plus
+# the requests themselves) inside the alarm command's tolerable latency.
+CONTROL_ATTEMPTS = 3
+CONTROL_RETRY_DELAY_SECONDS = 2
 
 
 def _find_bypass_error(response_data: JablotronSectionControlResponse, component_id: str) -> str | None:
@@ -148,19 +158,56 @@ class JablotronClient:
         is the request repeated with the bypass confirmed. Sections whose devices are all
         closed therefore still cost a single request, and a bypass becomes an observable event
         instead of something that silently happens on every arm.
+
+        Transient cloud failures are retried, because Jablotron Cloud intermittently answers
+        an otherwise valid control request with an error. Arming and disarming are idempotent
+        — the panel ends in the requested state whether it receives the command once or three
+        times — so replaying a request that may already have landed is safe.
+
+        Three classes of failure are deliberately NOT retried:
+          * a rejected PIN, because repeating it cannot help and the panel locks out after
+            enough consecutive bad codes;
+          * an expired session, which _api_call already resolves by re-logging in once;
+          * a rate limit, where retrying is precisely what the cloud is asking us to stop.
         """
 
-        return self._api_call(
-            lambda bridge: self._control_section(
-                bridge,
-                service_id=service_id,
-                component_id=component_id,
-                state=state,
-                pin_code=pin_code,
-                service_type=service_type,
-                force=force,
-            )
-        )
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return self._api_call(
+                    lambda bridge: self._control_section(
+                        bridge,
+                        service_id=service_id,
+                        component_id=component_id,
+                        state=state,
+                        pin_code=pin_code,
+                        service_type=service_type,
+                        force=force,
+                    )
+                )
+            except (IncorrectPinCodeException, UnauthorizedException, TooManyRequestsException):
+                raise
+            except Exception as ex:  # noqa: BLE001
+                if attempt >= CONTROL_ATTEMPTS:
+                    _LOGGER.error(
+                        "Control request '%s' for section '%s' failed on all %d attempts: %s",
+                        state,
+                        component_id,
+                        CONTROL_ATTEMPTS,
+                        ex,
+                    )
+                    raise
+                _LOGGER.warning(
+                    "Control request '%s' for section '%s' failed on attempt %d/%d (%s), retrying in %ss",
+                    state,
+                    component_id,
+                    attempt,
+                    CONTROL_ATTEMPTS,
+                    ex,
+                    CONTROL_RETRY_DELAY_SECONDS,
+                )
+                time.sleep(CONTROL_RETRY_DELAY_SECONDS)
 
     @staticmethod
     def _control_section(
@@ -206,15 +253,24 @@ class JablotronClient:
 
             return response.json().get("data", {})
 
+        # jablotronpy's helper is reused for its EXCEPTIONS only — WRONG-CODE and every other
+        # control error raise exactly as upstream. Its return value is discarded on purpose:
+        # it reports success only when the response already lists the section at the requested
+        # state, which is impossible while the panel counts down its exit delay, so a perfectly
+        # good ARM frequently comes back False. An error-free response means the cloud accepted
+        # the command, and that is what this returns.
+        def accepted(response_data: JablotronSectionControlResponse) -> bool:
+            """Raise on any real control error, otherwise report the request as accepted."""
+
+            bridge._was_control_action_successful(response_data, component_id, state)  # noqa: SLF001
+            return True
+
         response_data = request(with_bypass=False)
         bypass_error = _find_bypass_error(response_data, component_id)
 
         # Either nothing had to be bypassed or bypassing is switched off in the configuration.
-        # Letting jablotronpy judge the response keeps WRONG-CODE and every other control error
-        # raising exactly the same exceptions as upstream.
         if bypass_error is None or not force:
-            success = bridge._was_control_action_successful(response_data, component_id, state)  # noqa: SLF001
-            return JablotronSectionControlResult(success=success)
+            return JablotronSectionControlResult(success=accepted(response_data))
 
         # Active devices block the section and bypassing is allowed, so confirm it the way the
         # app does once the user acknowledges its bypass prompt.
@@ -224,7 +280,7 @@ class JablotronClient:
             bypass_error,
         )
         response_data = request(with_bypass=True)
-        success = bridge._was_control_action_successful(response_data, component_id, state)  # noqa: SLF001
+        success = accepted(response_data)
 
         return JablotronSectionControlResult(success=success, bypassed=success, control_error=bypass_error)
 
