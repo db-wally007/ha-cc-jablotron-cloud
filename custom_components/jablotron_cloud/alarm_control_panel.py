@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from functools import partial
 import logging
 
@@ -17,9 +18,15 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from . import JablotronClient, JablotronConfigEntry, JablotronData, JablotronDataCoordinator
-from .const import DOMAIN, EVENT_SECTION_BYPASSED, SIGNAL_SECTION_BYPASSED
+from .const import (
+    ASSUMED_TRANSITION_TIMEOUT,
+    DOMAIN,
+    EVENT_SECTION_BYPASSED,
+    SIGNAL_SECTION_BYPASSED,
+)
 from .entity import JablotronEntity
 from .utils import find_section_alarm_event, get_component_state, section_state_to_alarm_state
 
@@ -107,6 +114,11 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
         self._authorization_required = requires_authorization
         self._attr_alarm_state = current_state
         self._attr_extra_state_attributes = None
+        # Set while an arming/disarming state is being assumed ahead of the cloud confirming
+        # it; see _assume_transition and _handle_coordinator_update.
+        self._assumed_transition: AlarmControlPanelState | None = None
+        self._assumed_previous: AlarmControlPanelState | None = None
+        self._assumed_expires: datetime | None = None
         # Set supported features once during initialization
         self._attr_supported_features = AlarmControlPanelEntityFeature.ARM_AWAY
         if partial_arm_enabled:
@@ -138,18 +150,33 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
         fails to confirm is NOT treated as a failure: jablotronpy's success flag requires the
         section to already report the requested state, which it cannot do while the panel is
         in its exit delay, so trusting it here would revert perfectly good arm commands.
+
+        The assumption is also remembered so that _handle_coordinator_update can tell a poll
+        that has not caught up yet from one carrying real news.
         """
 
         previous_state = self._attr_alarm_state
+        self._assumed_transition = transition
+        self._assumed_previous = previous_state
+        self._assumed_expires = dt_util.utcnow() + ASSUMED_TRANSITION_TIMEOUT
         self._attr_alarm_state = transition
         self.async_write_ha_state()
 
         return previous_state
 
     @callback
+    def _clear_assumed_transition(self) -> None:
+        """Stop assuming a transition and let polled state through again."""
+
+        self._assumed_transition = None
+        self._assumed_previous = None
+        self._assumed_expires = None
+
+    @callback
     def _revert_transition(self, previous_state: AlarmControlPanelState) -> None:
         """Put the assumed transition back after a failed request."""
 
+        self._clear_assumed_transition()
         self._attr_alarm_state = previous_state
         self.async_write_ha_state()
 
@@ -297,6 +324,8 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
         alarm = service["alarm"]
         event = find_section_alarm_event(alarm, self._section_name)
         if event is not None:
+            # A real alarm always wins over an assumed transition.
+            self._clear_assumed_transition()
             _LOGGER.debug("Section '%s' triggered: %s", self._section_name, event.get("message"))
             self._attr_alarm_state = AlarmControlPanelState.TRIGGERED
             self._attr_extra_state_attributes = {
@@ -320,5 +349,35 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
             return
 
         _LOGGER.debug("Section '%s' received state '%s'", self._section_name, section_state)
-        self._attr_alarm_state = section_state_to_alarm_state(section_state)
+        polled_state = section_state_to_alarm_state(section_state)
+
+        if self._assumed_transition is not None:
+            if self._assumed_expires is not None and dt_util.utcnow() >= self._assumed_expires:
+                # The assumption has outlived any realistic exit or entry delay, so whatever
+                # the panel is doing, the cloud is now the better authority.
+                _LOGGER.debug(
+                    "Assumed '%s' for section '%s' expired, accepting polled state '%s'",
+                    self._assumed_transition,
+                    self._section_name,
+                    section_state,
+                )
+                self._clear_assumed_transition()
+            elif polled_state == self._assumed_previous:
+                # The cloud still reports the state the command was issued from. Jablotron
+                # reports a section as DISARM for the entire exit delay, so this is the panel
+                # counting down rather than the command having failed — dropping the assumed
+                # transition here is what used to bounce the entity back to disarmed a couple
+                # of seconds after arming, leaving it wrong until the delay ended.
+                _LOGGER.debug(
+                    "Section '%s' still reports '%s' while '%s' is assumed, keeping the transition",
+                    self._section_name,
+                    section_state,
+                    self._assumed_transition,
+                )
+                return
+            else:
+                # The poll carries real news: the transition finished.
+                self._clear_assumed_transition()
+
+        self._attr_alarm_state = polled_state
         self.async_write_ha_state()

@@ -29,6 +29,14 @@ BYPASS_CONTROL_ERRORS = ("BYPASS", "BYPASS-TIMED")
 # pulse meant to drive a notification or a pop-up rather than a lasting state.
 BYPASS_SIGNAL_DURATION = timedelta(seconds=30)
 
+# How long an assumed arming/disarming state may survive polls that still report the state
+# the command was issued from. Jablotron reports a section as DISARM for the whole exit
+# delay, so the first poll after an arm lands mid-delay and would otherwise revert the
+# entity to disarmed until the delay ends (measured: reverted 2.2s after the command and
+# stayed wrong for 31s). The timeout only bounds the assumption if a command silently never
+# takes effect; it is generous enough to outlast any realistic exit or entry delay.
+ASSUMED_TRANSITION_TIMEOUT = timedelta(seconds=120)
+
 # Fired on the Home Assistant bus for every arm that required active devices to be bypassed.
 EVENT_SECTION_BYPASSED = f"{DOMAIN}_section_bypassed"
 
