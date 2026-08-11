@@ -158,6 +158,25 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
         self._attr_alarm_state = previous_state
         self.async_write_ha_state()
 
+    async def _resync_after_unknown_outcome(self) -> None:
+        """Re-read the panel after a command whose outcome could not be determined.
+
+        A request can fail after the panel has already acted on it — a response lost on the
+        way back leaves the section armed while this entity has just been reverted to
+        disarmed. Reverting is still the right default, because it never claims a command
+        worked, but the reverted value is a guess and must not be left standing for a whole
+        poll cycle. The dangerous direction is a disarm whose response is lost: the entity
+        would assert armed_away while the section is actually disarmed, i.e. it would claim
+        the premises are protected when they are not.
+
+        Refreshing here bypasses the request debouncer so the guess is replaced by the
+        panel's real state in about a second rather than up to 30. If that refresh cannot
+        reach the cloud either, the coordinator marks the entity unavailable, which is the
+        safe outcome — no state claimed at all.
+        """
+
+        await self.coordinator.async_refresh()
+
     async def async_alarm_disarm(self, code: str | None = None) -> None:
         """Send disarm request."""
         previous_state = self._assume_transition(AlarmControlPanelState.DISARMING)
@@ -185,6 +204,7 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
         except Exception as ex:
             self._revert_transition(previous_state)
+            await self._resync_after_unknown_outcome()
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="alarm_control_failed") from ex
 
         # Every except branch above re-raises, so reaching here means the cloud accepted
@@ -229,6 +249,7 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
         except Exception as ex:
             self._revert_transition(previous_state)
+            await self._resync_after_unknown_outcome()
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="alarm_control_failed") from ex
 
         # Every except branch above re-raises, so reaching here means the cloud accepted
@@ -276,6 +297,7 @@ class JablotronAlarmControlPanel(JablotronEntity, AlarmControlPanelEntity):
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="rate_limited") from ex
         except Exception as ex:
             self._revert_transition(previous_state)
+            await self._resync_after_unknown_outcome()
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="alarm_control_failed") from ex
 
         # Every except branch above re-raises, so reaching here means the cloud accepted
