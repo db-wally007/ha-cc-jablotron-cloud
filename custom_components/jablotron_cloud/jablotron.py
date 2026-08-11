@@ -1,7 +1,9 @@
 """Client for Jablotron Cloud API."""
 
 from collections.abc import Callable
+from functools import wraps
 import logging
+import sys
 import threading
 import time
 from typing import Literal
@@ -20,10 +22,38 @@ from jablotronpy import (
     UnauthorizedException,
 )
 
-from .const import BYPASS_CONTROL_ERRORS
+from .const import BYPASS_CONTROL_ERRORS, REQUEST_TIMEOUT_SECONDS
 from .types import JablotronSectionControlResult, JablotronServiceData
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _install_request_timeout() -> None:
+    """Give every jablotronpy HTTP request a default timeout.
+
+    jablotronpy issues all of its calls through a module-level ``post`` imported from
+    ``requests``, with no timeout argument, so a connection that accepts but never answers
+    hangs the calling worker thread for good. Wrapping that one name covers polling and
+    control alike, which is safer than reproducing the library's status-code handling here
+    just to pass a timeout through.
+    """
+
+    module = sys.modules[Jablotron.__module__]
+    if getattr(module.post, "_jablotron_timeout_installed", False):
+        return
+
+    original_post = module.post
+
+    @wraps(original_post)
+    def post_with_timeout(*args, **kwargs):
+        kwargs.setdefault("timeout", REQUEST_TIMEOUT_SECONDS)
+        return original_post(*args, **kwargs)
+
+    post_with_timeout._jablotron_timeout_installed = True  # noqa: SLF001
+    module.post = post_with_timeout
+
+
+_install_request_timeout()
 
 # How many times a section control request is attempted before giving up, and how long to
 # wait between attempts. control_section() runs in an executor thread, so the sleep blocks
@@ -64,6 +94,13 @@ class JablotronClient:
         # bridge instance carries the session cookie set by perform_login().
         self._bridge: Jablotron | None = None
         self._login_lock = threading.Lock()
+        # Serialises every cloud call so a scheduled poll can never interleave with a
+        # command. Without it the poll that runs while an arm request is still being
+        # negotiated reports the section as it was BEFORE the command — correctly, since
+        # the panel has not accepted anything yet — and that accurate-but-premature reading
+        # lands on top of the assumed transition. Commands wait for an in-flight poll and
+        # polls wait for an in-flight command; REQUEST_TIMEOUT_SECONDS bounds either wait.
+        self._api_lock = threading.Lock()
 
     def get_default_pin(self) -> str | None:
         """Return the default PIN code."""
@@ -109,13 +146,14 @@ class JablotronClient:
         UnauthorizedException, which is the only way an auth error propagates to callers.
         """
 
-        bridge = self._ensure_logged_in()
-        try:
-            return func(bridge)
-        except (SessionExpiredException, UnauthorizedException):
-            _LOGGER.debug("Jablotron Cloud session is no longer valid, re-logging in and retrying")
-            self._invalidate_session(bridge)
-            return func(self._ensure_logged_in())
+        with self._api_lock:
+            bridge = self._ensure_logged_in()
+            try:
+                return func(bridge)
+            except (SessionExpiredException, UnauthorizedException):
+                _LOGGER.debug("Jablotron Cloud session is no longer valid, re-logging in and retrying")
+                self._invalidate_session(bridge)
+                return func(self._ensure_logged_in())
 
     def get_services(self) -> list[JablotronService]:
         """Return list of services associated with the Jablotron Cloud account."""
